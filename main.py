@@ -1,19 +1,13 @@
 import os
 import asyncio
 import logging
-import aiohttp
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-
-# --- ИМПОРТЫ ДЛЯ ОБХОДА БЛОКИРОВКИ ---
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.telegram import TelegramAPIServer
 from aiogram.client.default import DefaultBotProperties
-# ------------------------------------------
 
 # Локальные модули
 import parser_logic
@@ -26,7 +20,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# Объявляем бота глобально, чтобы хендлеры и функции могли к нему обращаться
+# Объявляем бота глобально
 bot: Bot = None
 dp = Dispatcher()
 
@@ -47,10 +41,108 @@ DATA_DIR = "data"
 # Состояния для админа
 class AdminStates(StatesGroup):
     waiting_for_file = State()
+    waiting_for_proxies = State()
 
 # Состояния для обратной связи
 class FeedbackStates(StatesGroup):
     waiting_for_feedback = State()
+
+# --- ФУНКЦИИ ПРОКСИ ---
+
+@dp.message(F.text == "🚀 Прокси для Telegram")
+async def send_proxy(message: types.Message, state: FSMContext):
+    await delete_prev_msg(state)
+    proxies = database.get_all_proxies()
+    
+    if not proxies:
+        await message.answer("😔 *К сожалению, сейчас нет доступных прокси.*", parse_mode="Markdown")
+        return
+    
+    await message.answer(
+        "🚀 *Прокси для Telegram*\n\n"
+        "Выберите прокси из списка ниже для стабильной работы Telegram:",
+        reply_markup=keyboards.proxies_list_keyboard(proxies),
+        parse_mode="Markdown"
+    )
+    try: await message.delete()
+    except: pass
+
+@dp.message(Command("add_proxy"))
+async def admin_add_proxy_start(message: types.Message, state: FSMContext):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        await message.answer("🚫 У вас нет прав администратора.")
+        return
+    
+    await message.answer(
+        "🚀 *ДОБАВЛЕНИЕ ПРОКСИ*\n\n"
+        "Отправьте ссылки на MTProto прокси (каждую с новой строки).\n"
+        "Например: `https://t.me/proxy?server=...`",
+        parse_mode="Markdown"
+    )
+    await state.set_state(AdminStates.waiting_for_proxies)
+
+@dp.message(AdminStates.waiting_for_proxies)
+async def process_proxies(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовые ссылки.")
+        return
+    
+    links = message.text.split("\n")
+    added_count = 0
+    for link in links:
+        link = link.strip()
+        if link.startswith("https://t.me/proxy?") or link.startswith("tg://proxy?"):
+            if database.add_proxy(link):
+                added_count += 1
+    
+    await message.answer(f"✅ Успешно добавлено {added_count} новых прокси!")
+    await state.clear()
+
+@dp.message(Command("delete_proxy"))
+async def admin_delete_proxy_start(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        await message.answer("🚫 У вас нет прав администратора.")
+        return
+    
+    proxies = database.get_all_proxies()
+    if not proxies:
+        await message.answer("🤷 Нет доступных прокси для удаления.")
+        return
+    
+    await message.answer(
+        "🗑 *УДАЛЕНИЕ ПРОКСИ*\nВыберите прокси, который хотите удалить:",
+        reply_markup=keyboards.admin_proxies_delete_keyboard(proxies),
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(F.data.startswith("admin_del_proxy_"))
+async def process_admin_delete_proxy(callback: types.CallbackQuery):
+    if str(callback.from_user.id) != str(ADMIN_ID):
+        await callback.answer("🚫 Доступ запрещен.", show_alert=True)
+        return
+    
+    proxy_id = int(callback.data.split("admin_del_proxy_")[1])
+    database.delete_proxy_by_id(proxy_id)
+    await callback.answer("✅ Прокси удален!", show_alert=True)
+    
+    proxies = database.get_all_proxies()
+    if proxies:
+        await callback.message.edit_text(
+            "🗑 *УДАЛЕНИЕ ПРОКСИ*\nВыберите следующий прокси или нажмите Отмена:",
+            reply_markup=keyboards.admin_proxies_delete_keyboard(proxies),
+            parse_mode="Markdown"
+        )
+    else:
+        await callback.message.edit_text("✅ Все прокси удалены.")
+
+@dp.message(Command("clear_proxies"))
+async def admin_clear_proxies(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        await message.answer("🚫 У вас нет прав администратора.")
+        return
+    
+    database.delete_all_proxies()
+    await message.answer("🗑 Все прокси были успешно удалены из базы данных.")
 
 # Функция для безопасного удаления сообщения
 async def delete_prev_msg(state: FSMContext):
@@ -339,26 +431,16 @@ async def cancel_admin_delete(callback: types.CallbackQuery):
 
 async def main():
     global bot
+    bot = Bot(
+        token=BOT_TOKEN, 
+        default=DefaultBotProperties(parse_mode="Markdown")
+    )
     
-    CUSTOM_API_URL = "https://tg-proxy-bot.ahunovniaz04.workers.dev"
-    custom_server = TelegramAPIServer.from_base(CUSTOM_API_URL)
-    
-    # ВАЖНО: Добавляем timeout=15.0 (просто числом!)
-    # Теперь общее время ожидания будет: 15 (сессия) + 10 (polling) = 25 секунд.
-    # Это МЕНЬШЕ лимита Cloudflare (30 сек), поэтому бот перестанет "зависать" в пустоте.
-    async with AiohttpSession(api=custom_server, timeout=15.0) as session:
-        bot = Bot(
-            token=BOT_TOKEN, 
-            session=session,
-            default=DefaultBotProperties(parse_mode="Markdown")
-        )
-        
-        print("Бот запущен и проверяет сообщения!")
-        try:
-            # Опрос каждые 10 секунд
-            await dp.start_polling(bot, polling_timeout=1)
-        finally:
-            pass 
+    print("Бот запущен напрямую к API Telegram!")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 if __name__ == "__main__":
     try:

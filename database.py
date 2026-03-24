@@ -16,6 +16,54 @@ def init_db():
             last_seen DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS proxies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link TEXT UNIQUE
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def add_proxy(link):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('INSERT INTO proxies (link) VALUES (?)', (link,))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        success = False
+    conn.close()
+    return success
+
+def get_random_proxy():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT link FROM proxies ORDER BY RANDOM() LIMIT 1')
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def get_all_proxies():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, link FROM proxies')
+    proxies = cursor.fetchall()
+    conn.close()
+    return proxies
+
+def delete_proxy_by_id(proxy_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM proxies WHERE id = ?', (proxy_id,))
+    conn.commit()
+    conn.close()
+
+def delete_all_proxies():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM proxies')
     conn.commit()
     conn.close()
 

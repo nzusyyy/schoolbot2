@@ -5,9 +5,28 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def main_menu():
     kb = [
         [KeyboardButton(text="😋 Посмотреть меню"), KeyboardButton(text="📚 Расписание уроков")],
+        [KeyboardButton(text="🚀 Прокси для Telegram")],
         [KeyboardButton(text="💡 Предложить идею / Сообщить о баге")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, input_field_placeholder="Выберите раздел...")
+
+def connect_proxy_keyboard(link: str):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Подключить Proxy", url=link)]
+    ])
+
+def proxies_list_keyboard(proxies: list):
+    builder = InlineKeyboardBuilder()
+    for i, (p_id, link) in enumerate(proxies, 1):
+        builder.row(InlineKeyboardButton(text=f"🚀 Proxy #{i}", url=link))
+    return builder.as_markup()
+
+def admin_proxies_delete_keyboard(proxies: list):
+    builder = InlineKeyboardBuilder()
+    for i, (p_id, link) in enumerate(proxies, 1):
+        builder.row(InlineKeyboardButton(text=f"🗑 Удалить Proxy #{i}", callback_data=f"admin_del_proxy_{p_id}"))
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_delete"))
+    return builder.as_markup()
 
 # --- КЛАВИАТУРЫ МЕНЮ ПИТАНИЯ ---
 
